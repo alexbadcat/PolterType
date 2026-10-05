@@ -9,7 +9,7 @@ use zbus::blocking::Connection;
 use zbus::zvariant::{ObjectPath, Value};
 
 use super::atspi_caret::Extents;
-use super::consts::COORD_TYPE_WINDOW;
+use super::consts::{ATSPI_ROLE_PASSWORD_TEXT, COORD_TYPE_WINDOW};
 
 /// `GetCharacterExtents` on the signal's accessible, in [window
 /// coordinates](COORD_TYPE_WINDOW). Failures (app exited, object
@@ -76,4 +76,37 @@ pub(super) fn caret_offset_property(
         Value::I32(offset) => Some(offset),
         _ => None,
     }
+}
+
+/// Whether the accessible reports AT-SPI role `PASSWORD_TEXT` — the
+/// toolkit's own signal for a masked entry (GTK's `GtkPasswordEntry`,
+/// Qt's `QLineEdit::Password`, …), via the same
+/// `org.a11y.atspi.Accessible` interface `atspi_owner.rs` already
+/// reads `Parent` from. `GetRole` returns the role as the wire's
+/// `u32`; anything that is not a successful, exact
+/// [`ATSPI_ROLE_PASSWORD_TEXT`] reads as "not a password field" —
+/// never an error, same as every other query in this module. That is
+/// also the fail-safe direction: a dead bus, an app with no a11y
+/// bridge, or a role the toolkit never set all look identical from
+/// here, and all three must leave auto-correction working rather than
+/// silently disable it. See `FocusTracker::is_password_field` and
+/// `docs/KNOWN-GAPS.md`.
+pub(super) fn is_password_role(conn: &Connection, sender: &str, path: &ObjectPath<'_>) -> bool {
+    let reply = match conn.call_method(
+        Some(sender),
+        path.clone(),
+        Some("org.a11y.atspi.Accessible"),
+        "GetRole",
+        &(),
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            debug!(%e, "AT-SPI caret watcher: GetRole failed");
+            return false;
+        }
+    };
+    reply
+        .body()
+        .deserialize::<u32>()
+        .is_ok_and(|role| role == ATSPI_ROLE_PASSWORD_TEXT)
 }

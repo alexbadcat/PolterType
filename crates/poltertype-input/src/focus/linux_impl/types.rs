@@ -17,6 +17,12 @@ pub(crate) struct CaretSample {
     pub(crate) height: u32,
     pub(crate) at: Instant,
     pub(crate) owner: CaretOwner,
+    /// Whether the accessible the caret belongs to reports AT-SPI role
+    /// `PASSWORD_TEXT` — read once per `TextCaretMoved` event, off the
+    /// same `sender`/`path` already queried for extents. See
+    /// `atspi_caret_queries::is_password_role` and
+    /// `FocusTracker::is_password_field`.
+    pub(crate) is_password: bool,
 }
 
 impl CaretSample {

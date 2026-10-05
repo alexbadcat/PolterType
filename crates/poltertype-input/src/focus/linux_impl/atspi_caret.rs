@@ -29,7 +29,9 @@ use zbus::zvariant::{ObjectPath, Value};
 use zbus::{MatchRule, Message, message};
 
 use super::atspi_caret_geometry::{anchor_from_rect, is_caret_shaped, is_degenerate, retry_offset};
-use super::atspi_caret_queries::{caret_offset_property, character_extents, object_extents};
+use super::atspi_caret_queries::{
+    caret_offset_property, character_extents, is_password_role, object_extents,
+};
 use super::atspi_owner::OwnerLookup;
 use super::enums::AtspiCaretError;
 use super::types::CaretSample;
@@ -165,7 +167,11 @@ fn watch(conn: &Connection, messages: MessageIterator, latest: &Mutex<Option<Car
 /// One `TextCaretMoved` signal → a caret sample. The sender's unique
 /// bus name plus the signal's object path identify the accessible
 /// object; its `org.a11y.atspi.Text` interface answers the extents
-/// queries and `owners` answers whose window they describe.
+/// queries, `owners` answers whose window they describe, and its
+/// `org.a11y.atspi.Accessible` role says whether it is a password
+/// field — one extra round-trip on the same object, piggybacked on an
+/// event this watcher already subscribes to rather than a connection
+/// of its own.
 fn sample_for_signal(
     conn: &Connection,
     owners: &mut OwnerLookup,
@@ -177,12 +183,14 @@ fn sample_for_signal(
     let offset = caret_offset_from_body(&msg.body())?;
     let (x, y, height) = resolve_caret_point(conn, sender.as_str(), path, offset)?;
     let owner = owners.resolve(conn, sender.as_str(), path)?;
+    let is_password = is_password_role(conn, sender.as_str(), path);
     Some(CaretSample {
         x,
         y,
         height,
         at: Instant::now(),
         owner,
+        is_password,
     })
 }
 

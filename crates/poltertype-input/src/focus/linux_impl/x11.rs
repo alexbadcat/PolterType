@@ -85,6 +85,15 @@ impl FocusTracker for X11FocusTracker {
         self.caret.as_ref()?.latest().map(CaretSample::into_hint)
     }
 
+    /// Off the shared caret watcher, same as `caret_hint` — see
+    /// `CaretOnlyFocusTracker::is_password_field`.
+    fn is_password_field(&self) -> bool {
+        self.caret
+            .as_ref()
+            .and_then(|c| c.latest())
+            .is_some_and(|s| s.is_password)
+    }
+
     fn backend_name(&self) -> &'static str {
         "linux-x11-ewmh"
     }

@@ -68,6 +68,17 @@ impl FocusTracker for CaretOnlyFocusTracker {
         self.caret.as_ref()?.latest().map(CaretSample::into_hint)
     }
 
+    /// Off the same caret sample `caret_hint` reads, not a separate
+    /// query: no caret watcher (or no sample yet) answers `false`,
+    /// same fail-safe direction as everything else that depends on
+    /// this tracker's a11y bridge.
+    fn is_password_field(&self) -> bool {
+        self.caret
+            .as_ref()
+            .and_then(|c| c.latest())
+            .is_some_and(|s| s.is_password)
+    }
+
     fn backend_name(&self) -> &'static str {
         "linux-atspi"
     }

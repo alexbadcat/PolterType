@@ -16,3 +16,13 @@ pub(crate) const FOCUS_CACHE_TTL: Duration = Duration::from_millis(150);
 /// with kate on Hyprland). Window-relative extents stay correct; the
 /// consumer composes them with the compositor's live window rect.
 pub(crate) const COORD_TYPE_WINDOW: u32 = 1;
+
+/// `ATSPI_ROLE_PASSWORD_TEXT` from at-spi2-core's `AtspiRole` enum —
+/// "a text object used for passwords, or other places where the text
+/// content is not shown visibly to the user". Confirmed against
+/// `libatspi2.0-dev` 2.60.4
+/// (`/usr/include/at-spi-2.0/atspi/atspi-constants.h`) and
+/// cross-checked live via `gi.repository.Atspi.Role.PASSWORD_TEXT`.
+/// The AT-SPI2 D-Bus wire protocol numbers roles append-only, so this
+/// is stable across the ecosystem, not just this one header.
+pub(super) const ATSPI_ROLE_PASSWORD_TEXT: u32 = 40;

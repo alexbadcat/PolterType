@@ -119,6 +119,10 @@ fn an_atspi_tracker_with_no_caret_still_answers() {
     let tracker = super::caret_only::CaretOnlyFocusTracker::new(None, None);
     assert!(tracker.caret_hint().is_none());
     assert!(tracker.focused_exe().is_none());
+    // No caret watcher means no way to tell a password field from any
+    // other — `false`, not a panic, and the fail-safe direction (see
+    // `FocusTracker::is_password_field`).
+    assert!(!tracker.is_password_field());
 }
 
 /// Live check against the real session — needs a running Hyprland or
@@ -259,6 +263,7 @@ fn caret_sample_hint_carries_coordinates_age_and_owner() {
             pid: 4242,
             window: Some((800, 600)),
         },
+        is_password: false,
     };
     let hint = sample.into_hint();
     assert_eq!((hint.x, hint.y, hint.height), (3, 4, 5));
@@ -310,6 +315,77 @@ fn live_anchor_inputs_agree_on_the_focused_window() {
             }
             (g, c) => println!("geometry={g:?} caret={c:?}"),
         }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
+// ─── Password-field role (object:text-caret-moved + GetRole) ────────
+
+use super::atspi_caret_queries::is_password_role;
+use zbus::blocking::connection::Builder;
+use zbus::blocking::Connection;
+use zbus::zvariant::ObjectPath;
+
+/// A direct a11y-bus connection, for tests that need to call a query
+/// function on their own rather than through a watcher thread. `None`
+/// on a machine with no a11y bus — those tests then have nothing to
+/// assert against and return early.
+fn a11y_connection() -> Option<Connection> {
+    let session = Connection::session().ok()?;
+    let reply = session
+        .call_method(
+            Some("org.a11y.Bus"),
+            "/org/a11y/bus",
+            Some("org.a11y.Bus"),
+            "GetAddress",
+            &(),
+        )
+        .ok()?;
+    let address: String = reply.body().deserialize().ok()?;
+    Builder::address(address.as_str()).ok()?.build().ok()
+}
+
+/// A sender nobody owns must read as "not a password field" rather
+/// than propagate a bus error — the same churn-is-normal contract
+/// every other query in `atspi_caret_queries.rs` keeps, and the one
+/// that matters most here: a dead bus or a vanished app must never
+/// read as *confirmed* password, only as "cannot tell".
+#[test]
+fn is_password_role_fails_gracefully_for_an_unknown_sender() {
+    let Some(conn) = a11y_connection() else {
+        return; // no a11y bus here; nothing to assert against
+    };
+    let path = ObjectPath::from_static_str_unchecked("/org/a11y/atspi/accessible/root");
+    assert!(!is_password_role(&conn, ":99.99999", &path));
+}
+
+/// The end-to-end check, run by hand against a live desktop — this is
+/// the one piece of this feature that genuinely cannot be exercised
+/// without a person typing into a real password field (see
+/// `docs/KNOWN-GAPS.md` for why: GTK/Qt/Electron must themselves mark
+/// the field `PASSWORD_TEXT`, which nothing short of the real toolkit
+/// does).
+///
+/// ```text
+/// cargo test -p poltertype-input -- --ignored --nocapture \
+///     live_password_field_is_flagged
+/// # …then: focus an ordinary text field for a few seconds (prints
+/// # `password=false`), then focus a password field (a login form,
+/// # KDE Wallet's unlock dialog, `passwd` is a terminal and won't
+/// # show here) and type a character or two — prints `password=true`
+/// # once the toolkit's own caret event arrives.
+/// ```
+#[test]
+#[ignore = "needs a live desktop, an a11y bus, and someone focusing a password field"]
+fn live_password_field_is_flagged() {
+    let tracker = super::create_linux_focus_tracker(true);
+    println!("backend={}", tracker.backend_name());
+    for _ in 0..30 {
+        println!(
+            "focused_exe={:?} password={}",
+            tracker.focused_exe(),
+            tracker.is_password_field()
+        );
         std::thread::sleep(Duration::from_secs(1));
     }
 }

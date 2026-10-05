@@ -33,5 +33,23 @@ pub trait FocusTracker: Send + Sync {
         None
     }
 
+    /// Best-effort: is the currently-focused text entry a password /
+    /// secret field?
+    ///
+    /// `[engine].ignore_in_password_fields` reads this before the
+    /// engine buffers, corrects or lets the manual switch-last hotkey
+    /// touch a word — see `docs/DECISIONS.md`. Default `false`, the
+    /// same fail-safe direction as every other hint here: **`false`
+    /// also means "cannot tell"**, not just "confirmed not a
+    /// password" — a platform with no implementation, an app with no
+    /// accessibility bridge, and an ordinary text field all answer
+    /// alike. That is deliberate: a hint that leaned the other way
+    /// would silence auto-switch everywhere the OS cannot answer,
+    /// which is most terminals and every platform but Linux today.
+    /// See `docs/KNOWN-GAPS.md`.
+    fn is_password_field(&self) -> bool {
+        false
+    }
+
     fn backend_name(&self) -> &'static str;
 }
