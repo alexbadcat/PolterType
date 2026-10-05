@@ -4,6 +4,35 @@ All notable changes to PolterType are recorded here. The format is
 loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Security
+
+- **A word typed into a password field is left alone, on Linux.**
+  `[engine].ignore_in_password_fields` has existed since the setting
+  was first added, and read nothing — the engine had no way to tell a
+  password field from any other, so it corrected (and offered
+  switch-last on) whatever was typed there same as everywhere else.
+  The existing AT-SPI caret watcher now also asks `GetRole` on the
+  object a `TextCaretMoved` event came from, and remembers whether it
+  answered `PASSWORD_TEXT` — one extra round-trip on a connection and
+  an event this watcher already holds, not a new a11y-bus connection
+  of its own (joining the bus at all has its own cost — see the
+  Telegram screen-reader-banner entry below). When the focused field
+  reports password, the engine now declines before it renders the word
+  under any layout, before the smart-command matcher sees it, before
+  it enters word-history, and before the manual switch-last hotkey can
+  touch it — the hotkey carries its own independent check against
+  *live* focus, so a word still mid-buffer when the hotkey fires is
+  covered too, not just one already stashed.
+  **Best-effort, same as every other AT-SPI-backed feature here**: an
+  app with no accessibility bridge (most terminals), a field focused
+  but never yet typed into, or caret tracking turned off, all read as
+  "unable to tell" — which behaves exactly as before this change, not
+  as a new silent failure. Windows and macOS have no implementation
+  yet; the setting exists there but changes nothing, same as until
+  now. See `docs/KNOWN-GAPS.md`.
+
 ## [0.36.4] — the key that was still down
 
 ### Fixed

@@ -172,6 +172,19 @@ pub struct LanguageSettings {
 pub struct EngineSettings {
     pub min_word_length: usize,
     pub confidence_threshold: f32,
+    /// Skip auto-switching, the smart-command/word-history pipeline and
+    /// the manual switch-last hotkey for a word typed while the
+    /// focused field reports itself as a password entry.
+    ///
+    /// **Linux only, and best-effort even there**: the signal is the
+    /// focused accessible's AT-SPI role (`PASSWORD_TEXT`), which only
+    /// exists for apps with a live accessibility bridge — the same
+    /// caveat `[exceptions].disabled_apps` and the suggestion tooltip's
+    /// caret anchor already carry on GNOME/KDE Wayland. An app with no
+    /// bridge (many terminals), and every password field on Windows
+    /// and macOS today, cannot be told apart from an ordinary field —
+    /// `false` either way, never a guess in the dangerous direction.
+    /// See `docs/KNOWN-GAPS.md`.
     pub ignore_in_password_fields: bool,
     /// Word-buffer idle timeout (ms) — clears the buffer if the user
     /// pauses for this long.

@@ -141,6 +141,25 @@ impl SwitcherEngine {
                 });
             }
             EngineCommand::SwitchLastForcefully => {
+                // Checked here, independent of whatever `last_word`
+                // holds or whether a word is still mid-buffer: this is
+                // the *current* focus, not the stash. `decide()` also
+                // declines to stash a password word, but a word still
+                // being typed when the hotkey fires never reaches
+                // `decide()` at all — it goes straight through
+                // `word_in_progress` below — so the stash alone cannot
+                // be trusted to keep this gesture off password text.
+                // See `decide::decide`'s own password filter for the
+                // other half.
+                if self.settings.snapshot().engine.ignore_in_password_fields
+                    && self.focus_tracker.is_password_field()
+                {
+                    debug!(
+                        "manual switch-last ignored: focused field is a password field (AT-SPI \
+                         role PASSWORD_TEXT)"
+                    );
+                    return;
+                }
                 // Every fire our own correction provokes is stopped
                 // here, and only here. `force_switch_last` emits
                 // Backspaces, which Win32 `RegisterHotKey` reads

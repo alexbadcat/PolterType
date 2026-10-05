@@ -1490,8 +1490,54 @@ move too fast to be true.
   selection conversion.** The conversion reads and writes text; a
   non-text clipboard is replaced by the selection and not put back.
   Part of why the feature is off by default.
-- **Nothing distinguishes a password field.** A selection inside one is
-  copied like any other text while selection conversion is enabled.
+- **Selection conversion still cannot tell a password field from any
+  other.** A selection inside one is copied like any other text while
+  selection conversion is enabled — unlike the word-correction engine
+  below, this path never asks. Fixing it means teaching
+  `convert_selection` the same AT-SPI role check, which is future work,
+  not done by the fix described next.
+- **Password-field protection for layout correction is Linux-only, and
+  only as good as the focused app's accessibility bridge.** Since
+  0.37.0 `[engine].ignore_in_password_fields` (on by default) is read
+  against `FocusTracker::is_password_field`, which on Linux piggybacks
+  on the existing AT-SPI caret watcher: every `TextCaretMoved` event
+  also asks `GetRole` on the same object and remembers whether it
+  answered `PASSWORD_TEXT` (`crates/poltertype-input/src/focus/
+  linux_impl/atspi_caret_queries.rs`). When it reports password, the
+  engine declines before any per-layout rendering of the word, before
+  the smart-command matcher (which can run a shell command) sees it,
+  before it enters word-history, and before the manual switch-last
+  hotkey can touch it — the hotkey gets its own check against *live*
+  focus, independent of whatever is stashed, because a word still
+  being typed never reaches the stash at all. See `docs/DECISIONS.md`.
+
+  Three honest limits, all in the fail-safe direction (unable to tell
+  reads as "not a password field", never the other way):
+  - **No a11y bridge, no signal.** The same caveat the focus-tracking
+    bullet above already carries: most terminals, and any GTK/Qt/
+    Electron app that never raised its bridge, are invisible to this
+    check. A password typed into `sudo` at a shell prompt is not
+    detected — there is nothing on the bus to ask.
+  - **Riding the caret watcher means it depends on `caret_anchor`
+    being on and a caret event having fired at least once for this
+    field.** PolterType does not open an extra a11y-bus connection
+    purely to watch roles — see issue #66 in the paragraph above this
+    one: joining the bus at all raises `org.a11y.Status.IsEnabled`
+    session-wide, which some apps (Telegram) show the user as "a
+    screen reader is running". So where no caret tracking runs, no
+    password detection runs either, by the same design choice, not an
+    oversight. A field focused but never yet typed into (and so never
+    yet a caret event) answers `false` until the first keystroke's
+    event arrives — at word-boundary granularity this is at most the
+    first character of risk, not the whole word, because `decide()`
+    only runs once a word completes.
+  - **Windows and macOS have no implementation at all** —
+    `FocusTracker::is_password_field` is a trait default of `false`
+    there today, same as "cannot tell" everywhere else. Both OSes
+    expose their own password-field signals (UI Automation's
+    `IsPassword` property on Windows, `AXSecureTextField`/
+    `kAXAPIDisabledNotification` territory on macOS) and wiring either
+    one in is unclaimed follow-up work, not a blocked one.
 
 ## AI, plug-ins and onboarding
 

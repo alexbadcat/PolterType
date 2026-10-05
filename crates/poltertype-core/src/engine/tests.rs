@@ -27,7 +27,7 @@ mod engine_integration_tests {
     use super::*;
     use crate::layouts::LayoutDb;
     use crate::settings::SettingsStore;
-    use poltertype_input::{NoopFocusTracker, ReplayKey};
+    use poltertype_input::{FocusTracker, NoopFocusTracker, ReplayKey};
     use poltertype_layout::LayoutError;
     use poltertype_types::DetectionVerdict;
     use std::sync::Arc;
@@ -280,6 +280,26 @@ mod engine_integration_tests {
         }
     }
 
+    /// A focus tracker with one knob: whether the focused field reports
+    /// as a password entry. Stands in for a real AT-SPI backend's
+    /// `is_password_field` without a live a11y bus — everything else
+    /// answers like [`NoopFocusTracker`].
+    struct FixedFocusTracker {
+        password: bool,
+    }
+
+    impl FocusTracker for FixedFocusTracker {
+        fn focused_exe(&self) -> Option<String> {
+            None
+        }
+        fn is_password_field(&self) -> bool {
+            self.password
+        }
+        fn backend_name(&self) -> &'static str {
+            "test-fixed"
+        }
+    }
+
     // ─── Harness ─────────────────────────────────────────────────────
 
     struct Harness {
@@ -339,6 +359,27 @@ mod engine_integration_tests {
                 accept_modifiers,
                 |_| {},
                 None,
+                None,
+            )
+        }
+
+        /// Narrower than `start_configured`: fixes every argument but
+        /// `focus_tracker` and `tweak`, for tests that only care about
+        /// what the focused field reports itself as.
+        fn start_with_focus_tracker(
+            focus_tracker: Arc<dyn FocusTracker>,
+            tweak: impl FnOnce(&mut crate::settings::Settings),
+        ) -> Self {
+            Self::start_configured(
+                60_000,
+                MockEmitter::default(),
+                false,
+                None,
+                None,
+                None,
+                tweak,
+                None,
+                Some(focus_tracker),
             )
         }
 
@@ -359,6 +400,7 @@ mod engine_integration_tests {
             accept_modifiers: Option<&str>,
             tweak: impl FnOnce(&mut crate::settings::Settings),
             clipboard: Option<Arc<dyn poltertype_input::Clipboard>>,
+            focus_tracker: Option<Arc<dyn FocusTracker>>,
         ) -> Self {
             let mut settings = crate::settings::Settings::default();
             settings.engine.idle_timeout_ms = idle_timeout_ms;
@@ -409,7 +451,7 @@ mod engine_integration_tests {
                 // The gate is a no-op in tests: these exercise the
                 // path taken when keystrokes cannot be held back.
                 key_gate: poltertype_input::KeyGate::disabled(),
-                focus_tracker: Arc::new(NoopFocusTracker),
+                focus_tracker: focus_tracker.unwrap_or_else(|| Arc::new(NoopFocusTracker)),
                 audio: Arc::new(audio),
                 out_tx,
                 suggester,
@@ -1650,6 +1692,7 @@ mod engine_integration_tests {
             None,
             |s| s.selection.enabled = true,
             Some(Arc::clone(&clipboard) as Arc<dyn poltertype_input::Clipboard>),
+            None,
         );
         (h, clipboard)
     }
@@ -2368,6 +2411,7 @@ mod engine_integration_tests {
             None,
             |s| s.exceptions.word_whitelist = vec!["GHBDSN".into()],
             None,
+            None,
         );
         type_word(&h, &GHBDSN);
         h.tap(SPACE);
@@ -2382,6 +2426,122 @@ mod engine_integration_tests {
                 .iter()
                 .any(|e| matches!(e, SwitcherEvent::KeptCurrent { reason } if reason.contains("whitelist"))),
             "the decision trail must name the whitelist as the reason"
+        );
+    }
+
+    /// `[engine].ignore_in_password_fields` (on by default) reading a
+    /// focus tracker that reports a password field: the detector here
+    /// switches everything it is shown, same as the whitelist test
+    /// above, so a correction reaching it would be visible.
+    #[test]
+    fn a_word_in_a_password_field_is_not_auto_corrected() {
+        let h = Harness::start_with_focus_tracker(
+            Arc::new(FixedFocusTracker { password: true }),
+            |_| {},
+        );
+        type_word(&h, &GHBDSN);
+        h.tap(SPACE);
+        h.settle();
+        let (ops, events) = h.stop();
+        assert!(
+            ops.is_empty(),
+            "a word in a reported password field must not be touched, got {ops:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SwitcherEvent::KeptCurrent { reason } if reason.contains("password"))),
+            "the decision trail must name the password field as the reason"
+        );
+    }
+
+    /// The manual switch-last hotkey must decline too — including for
+    /// a word still mid-buffer, which never reaches `decide()` at all
+    /// (`word_in_progress` is a separate path off `last_word`'s own
+    /// stash). This is the gesture a person reaches for *because* the
+    /// automatic pass stayed quiet, so it has to stay quiet with it.
+    #[test]
+    fn switch_last_does_nothing_on_an_in_progress_password_word() {
+        let h = Harness::start_with_focus_tracker(
+            Arc::new(FixedFocusTracker { password: true }),
+            |_| {},
+        );
+        type_word(&h, &GHBDSN);
+        h.settle();
+        h.cmd_tx
+            .send(EngineCommand::SwitchLastForcefully)
+            .expect("engine alive");
+        h.settle();
+        assert!(
+            erase_counts(&h).is_empty(),
+            "the manual hotkey must not touch a word still being typed in a password field"
+        );
+    }
+
+    /// Same hotkey, against a word that already completed (so it is
+    /// sitting in `last_word`'s stash) while focus is still reported as
+    /// a password field.
+    #[test]
+    fn switch_last_does_nothing_on_a_completed_password_word() {
+        let h = Harness::start_with_focus_tracker(
+            Arc::new(FixedFocusTracker { password: true }),
+            |_| {},
+        );
+        type_word(&h, &GHBDSN);
+        h.tap(SPACE);
+        h.settle();
+        h.cmd_tx
+            .send(EngineCommand::SwitchLastForcefully)
+            .expect("engine alive");
+        h.settle();
+        assert!(
+            erase_counts(&h).is_empty(),
+            "the manual hotkey must not touch a completed word in a password field"
+        );
+    }
+
+    /// The opt-out: a user who sets `ignore_in_password_fields = false`
+    /// gets the old behaviour back even where AT-SPI says password —
+    /// the setting gates the signal, the signal does not override the
+    /// setting.
+    #[test]
+    fn password_protection_can_be_turned_off() {
+        let h = Harness::start_configured(
+            60_000,
+            MockEmitter::default(),
+            false,
+            None,
+            None,
+            None,
+            |s| s.engine.ignore_in_password_fields = false,
+            None,
+            Some(Arc::new(FixedFocusTracker { password: true }) as Arc<dyn FocusTracker>),
+        );
+        type_word(&h, &GHBDSN);
+        h.tap(SPACE);
+        h.settle();
+        assert!(
+            !erase_counts(&h).is_empty(),
+            "ignore_in_password_fields = false must let the correction through regardless of \
+             what the focus tracker reports"
+        );
+    }
+
+    /// Sanity check in the other direction: a focus tracker that
+    /// answers `false` (the default — "cannot tell" reads the same as
+    /// "not a password field") must not disable auto-switch everywhere.
+    #[test]
+    fn an_ordinary_field_is_still_auto_corrected() {
+        let h = Harness::start_with_focus_tracker(
+            Arc::new(FixedFocusTracker { password: false }),
+            |_| {},
+        );
+        type_word(&h, &GHBDSN);
+        h.tap(SPACE);
+        h.settle();
+        assert!(
+            !erase_counts(&h).is_empty(),
+            "a focus tracker reporting no password field must correct normally"
         );
     }
 
@@ -2699,6 +2859,7 @@ mod engine_integration_tests {
             None,
             |s| s.general.paused = true,
             None,
+            None,
         );
         type_word(&h, &GHBDSN);
         h.tap(SPACE);
@@ -2731,6 +2892,7 @@ mod engine_integration_tests {
             None,
             None,
             |s| s.general.paused = true,
+            None,
             None,
         );
         h.cmd_tx
@@ -2779,6 +2941,7 @@ mod engine_integration_tests {
             None,
             None,
             |s| s.general.paused = true,
+            None,
             None,
         );
         h.cmd_tx
@@ -3631,6 +3794,7 @@ mod engine_integration_tests {
             None,
             None,
             |s| s.general.sound_on_correct = false,
+            None,
             None,
         );
         type_word(&quiet, &GHBDSN);

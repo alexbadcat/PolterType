@@ -102,6 +102,35 @@ impl SwitcherEngine {
         if keys.is_empty() {
             return;
         }
+
+        // Password fields, ahead of everything below on purpose. Every
+        // other filter in this function blocks the *automatic*
+        // decision only — the comment above "Pre-decision filters"
+        // says so, and the manual switch-last hotkey deliberately
+        // bypasses all of them by calling `force_switch_last` directly
+        // — see `run_loop::handle_command`'s own
+        // `EngineCommand::SwitchLastForcefully` guard for the other
+        // half of this gate, which is why that path must be kept
+        // independent of whatever `last_word` holds.
+        //
+        // This one is different in kind: it exists to keep rendered
+        // password text out of the engine's own memory, not just out
+        // of what it writes back. So it runs before any of that text
+        // is computed, not after — no per-layout candidate rendering,
+        // no smart-command match (which can run a shell command), no
+        // word-history entry, no `last_word` stash. `current_text` is
+        // never built; the reason sent downstream names no word.
+        if snap.engine.ignore_in_password_fields && self.focus_tracker.is_password_field() {
+            debug!(
+                "skipping word: focused field reports as a password field (AT-SPI role \
+                 PASSWORD_TEXT)"
+            );
+            let _ = self.out_tx.send(SwitcherEvent::KeptCurrent {
+                reason: "focused field is a password field".into(),
+            });
+            return;
+        }
+
         // No global min_word_length gate: each detector decides for
         // itself.
         self.settle_word_layout();

@@ -4850,3 +4850,74 @@ One thing degrades instead of failing. The tooltip symbol is looked up
 by name, once, at construction: a system carrying the pre-Ayatana
 `libappindicator3`, which has no tooltip API at all, gets the tray it
 had before and a debug line saying why.
+
+---
+
+## 2026-10-05 — Password-field detection rides the caret watcher it already has
+
+`[engine].ignore_in_password_fields` has been in `EngineSettings` since
+before this file starts, default `true`, and read by nothing —
+`crates/poltertype-core/src/settings/types.rs` even said so in a
+neighbouring doc comment ("there is no way to know a password field
+from any other"). Fixing it needed an answer to one question first:
+where does "is this field a password field" come from, on a platform
+that has one at all?
+
+**AT-SPI's own role, not a heuristic.** GTK's `GtkPasswordEntry`, Qt's
+`QLineEdit` in password mode and every toolkit in between already mark
+their accessible object `ATSPI_ROLE_PASSWORD_TEXT` — the same signal a
+screen reader uses to switch to "reading dots" mode. No name-sniffing
+the focused executable, no guessing from input masking behaviour: ask
+the toolkit, which already answers for a different consumer of the
+same bus.
+
+**Piggybacked on the caret watcher, not a connection of its own.**
+`pick.rs` already goes out of its way to avoid opening the a11y bus
+unless something wants a caret (`create_linux_focus_tracker`'s doc
+comment, and issue #66: joining the bus raises
+`org.a11y.Status.IsEnabled` session-wide, which Telegram shows the
+user as "a screen reader is running"). A second watcher subscribed to
+`object:state-changed:focused` would answer faster — immediately on
+focus, rather than waiting for the first caret move — but it would
+also mean a *second* always-on a11y-bus connection for every PolterType
+user who has the suggestion tooltip off, paid by everyone to protect
+the minority typing into a password field. The existing
+`TextCaretMoved` watcher already holds a live `sender`/`path` for the
+focused text object on every keystroke; one more `GetRole` call on
+that same object, stored alongside the extents already being read, is
+a connection this feature does not need to open. The cost: the very
+first character of a freshly-focused password field — before its own
+first caret event — is not yet covered. `docs/KNOWN-GAPS.md` says so;
+the alternative (a dedicated focus-event watcher, always running)
+widens the a11y-banner blast radius in trade for shaving that first
+character, which nobody asked for and the existing GNOME/Telegram
+complaint says is the wrong direction to trade in.
+
+**Fail-safe means `false` reads two ways, on purpose.** A platform
+with no implementation, an app with no accessibility bridge, and an
+ordinary field all answer `is_password_field() == false` — the same
+answer, not three different ones. The alternative (treat "cannot tell"
+as "assume password") would have silently gone quiet on every terminal
+and on both non-Linux platforms the day this shipped — the same
+mistake the disabled-apps skip-list made once already (see the "Focus,
+the tooltip and the Settings window" entry in `docs/KNOWN-GAPS.md`) and
+reversed. Getting this one wrong trades a correction some people rely
+on for a theoretical protection that only works where it already does.
+
+**Two independent gates, not one shared stash check.** The automatic
+path (`decide()`) and the manual switch-last hotkey
+(`EngineCommand::SwitchLastForcefully`) each check
+`FocusTracker::is_password_field()` on their own, rather than the
+hotkey trusting whatever `decide()` left in `last_word`. A word still
+being typed when the hotkey fires never reaches `decide()` at all — it
+goes through `word_in_progress`, straight off the buffer — so a single
+check gated on the stash would have left exactly that case uncovered.
+The automatic-path check also runs earlier than it strictly needs to
+for the hotkey's sake: before any per-layout candidate is rendered,
+before the smart-command matcher (which can run a user-configured
+shell command) ever sees the text, and before anything touches
+`last_word` or word-history. Every other filter in `decide()` runs
+*after* the stash, deliberately, so the manual hotkey can override an
+automatic "no" — password fields are the one case where that override
+itself has to be refused, which is why this filter does not live
+alongside them.
